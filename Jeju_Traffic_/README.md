@@ -1,4 +1,4 @@
-#Competition Overview & Background
+# Competition Overview & Background
 
 This competition was held by Korea data science competition website 'DACON'.
 Jeju island is one of the Korea's best touristy place with beautiful natural environments and things to enjoy! Popularity of Jeju island is steadily increasing that the total population of Jeju is expected to increase by millions in few years.
