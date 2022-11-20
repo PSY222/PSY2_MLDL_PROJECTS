@@ -1,0 +1,227 @@
+from google.colab import drive
+drive.mount('/content/drive')
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+%matplotlib inline
+
+# Call dataset with Pandas
+data_info = pd.read_csv() #dataset was downloaded on local space
+train = pd.read_csv()
+test = pd.read_csv()
+
+print("Train dataset shape is",train.shape," and Test dataset shape is ",test.shape)
+set(train.columns)-set(test.columns) #same columns are given in train and test data
+
+type_summary = {str(i):list(j) for i,j in train.groupby(train.dtypes,axis=1)}
+
+int_col = train.select_dtypes(include=['int64'])
+float_col = train.select_dtypes(include=['float64'])
+object_col = train.select_dtypes(include=['object'])
+
+'''
+# EDA Process
+1. Target value distribution of train data
+2. Missing values of train, test data
+3. Distribution of int64 > float 64 > object value
+4. Connection with target variables and input variables
+'''
+
+# Bar graph with different data types
+fig, ax = plt.subplots()
+x = ['object','int64','float64']
+y = [object_col.shape[1]-1,int_col.shape[1],float_col.shape[1]-1]
+plt.bar(x,y,width=0.5,color='b')
+#exclude 'id' and 'target
+
+def addlabels(x,y):
+  for i in range(len(x)):
+    plt.text(i,y[i],y[i],ha='center')
+
+plt.ylim(0,11)
+plt.title("Number of datatypes(train)")
+addlabels(x,y)
+plt.show()
+
+#Since our target is float value, making a histogram graph to compare the ratio of target value at train/test data
+fig, ax = plt.subplots()
+plt.hist(train.target,label='train',alpha=.5)
+plt.legend()
+plt.show()
+
+train.target.describe().apply("{:.1f}".format)
+
+plt.boxplot(train.target,vert=False,patch_artist=True)
+plt.tight_layout()
+#target has some outliers 
+
+#Checking missing values
+print("Train data has " + str(train.isnull().sum().sum()) + " null values and Test data has " + str(test.isnull().sum().sum()) + " null values")
+#There are no missing values in dataset fortunately
+
+#Distribution of int64 > float 64> object value
+int_col.nunique()
+
+#change basedate into datetime format
+import matplotlib.dates as mdates
+
+fig, ax = plt.subplots(2,figsize=(15,10))
+ax[0].hist(train['base_date'],alpha=.3,color='b')
+ax[0].hist(test['base_date'],alpha=.1,color='r',edgecolor='white')
+ax[0].xaxis.set_major_locator(mdates.MonthLocator())
+ax[0].xaxis.set_minor_locator(mdates.MonthLocator())
+ax[0].xaxis.set_major_formatter(mdates.ConciseDateFormatter(ax[0].xaxis.get_major_locator()))
+ax[0].set_title("Base_date distribution",fontsize=20)
+
+ax[1].hist(train['base_hour'],density=True,alpha=.3,color='b')
+ax[1].hist(test['base_hour'],density=True,alpha=.1,color='r',edgecolor='white')
+ax[1].set_title("Base_hour distribution",fontsize=20)
+ax[1].set_ylim(0,.1)
+
+plt.tight_layout()
+plt.show()
+
+#**Key Findings_ datetime(base_hour,base_date)
+
+# *   There are fluctuation between months
+# --> Since Jeju island is a touristy place, there are clearly peak season and non-peak season
+# *   test data base-date does not overlap with train data's base_date
+# *   There are some fluctuation between hours
+# *   Base hour distribution between train/test data is relatively similar
+
+train['base_date'].describe(datetime_is_numeric=True)
+
+# Variable ratio of 'road_in_use', 'lane_count', 'road_rating', 'multi_linked', 'connect_code', 'road_type']
+# Train data
+list(int_col.columns[2:])
+plt.figure(figsize=(10,12))
+plt.style.use('bmh')
+
+for i, col in enumerate(list(int_col.columns[2:])):
+  plt.subplot(3,3,i+1)
+  plt.pie(train[col].value_counts(),labels = train[col].value_counts().index,autopct="%.1f%%")
+  plt.title(f"% of {col}")
+
+plt.tight_layout(h_pad = 2.5)
+
+#Test data
+
+plt.figure(figsize=(10,12))
+plt.style.use('bmh')
+
+for i, col in enumerate(list(int_col.columns[2:])):
+  plt.subplot(3,3,i+1)
+  plt.pie(test[col].value_counts(),labels = test[col].unique(),autopct="%.1f%%")
+  plt.title(f"% of {col}")
+
+plt.tight_layout(h_pad = 2.5)
+
+
+#Key findings _ int_col
+#*   'road_in_use', 'multi_linked','connect_code' is biased both in train and test dataset
+#*   Test data has much biased composition then train data that we can consider drop on those features
+
+
+# Explore float cols
+float_col = float_col.iloc[:,:-1]
+float_col.head(5)
+float_col.describe().round(1)
+test[float_col.columns].describe().round(1)
+
+#Key Findings _float_col
+#'height_restricted','vehicle restricted' columns have identical 0 value in all cases, which makes it meaningless to both train and test data
+
+max_speed_limit = pd.DataFrame({'train' :train['maximum_speed_limit'].value_counts(),'test':test['maximum_speed_limit'].value_counts()})
+max_speed_limit['train'] = round(100*max_speed_limit['train']/max_speed_limit['train'].sum(),1)
+max_speed_limit['test'] = round(100*max_speed_limit['test']/max_speed_limit['test'].sum(),1)
+max_speed_limit
+# max_speed_limit distribution difference
+#train and test data have a slight composition difference on 30,40, 80km section
+
+# Latitude, Longitude distribution Analysis
+fig = plt.figure()
+ax1 = fig.add_subplot(111)
+ax1.scatter(train['start_latitude'],train['start_longitude'],c='r',marker='o',label='train')
+ax1.scatter(test['start_latitude'],test['start_longitude'],c='g',marker='s',label='test')
+plt.legend(loc='upper left')
+plt.show()
+
+fig = plt.figure()
+ax1 = fig.add_subplot(111)
+ax1.scatter(train['end_latitude'],train['end_longitude'],c='orange',marker='*',label='train')
+ax1.scatter(test['end_latitude'],test['end_longitude'],c='blue',marker='^',label='test')
+plt.legend(loc='upper left')
+plt.show()
+
+# How can we group string values? => I tried to categorize with a common features such as road name, village, public building... etc/
+ratio = []
+
+start = pd.DataFrame({'count' : train.groupby(['start_node_name'])['start_node_name'].size()}).reset_index().sort_values(by='count',ascending=False)
+start['ratio'] = 100*start['count']/train.shape[0]
+start['ratio'][:400].sum()
+
+#Random testing assessing the size of different groups
+bridge_road = list(object_col[object_col['road_name'].str.contains("교$")]['road_name'].unique())
+bridge_road
+
+general_road = list(object_col[object_col['road_name'].str.contains("일반국도")]['road_name'].unique())
+len(general_road)
+
+rural = list(object_col[object_col['road_name'].str.contains("지방도")]['road_name'].unique())
+len(rural)
+
+general = list(object_col[object_col['road_name'].str.contains("로$",regex=True)]['road_name'].unique())
+len(general)
+
+object_col['road_name'].sample(50)
+
+bridge = list(object_col[object_col['start_node_name'].str.contains("교$|.측",regex=True)]['start_node_name'].unique())
+len(bridge)
+
+living = list(object_col[object_col['start_node_name'].str.contains("주택|아파트$|아파트[0-9]|오피스텔|빌라|맨션|빌리지$|여관",regex=True)]['start_node_name'].unique())
+len(living)
+
+village = list(object_col[object_col['start_node_name'].str.contains("마을$",regex=True)]['start_node_name'].unique())
+len(village)
+village
+
+# Day of week, turn_restricted feature data visualization
+
+plt.cla()
+plt.clf()
+
+plt.rc('font',family='NanumBarunGothic')
+f = plt.figure(figsize=(15,10))
+ax1, ax2, ax3 = f.subplots(1,3)
+
+plt.style.use('fivethirtyeight')
+ax1.pie(train['day_of_week'].value_counts(),labels = train['day_of_week'].unique(),autopct="%.1f%%")
+ax2.pie(train['start_turn_restricted'].value_counts(),labels = train['start_turn_restricted'].unique(),autopct="%.1f%%")
+ax3.pie(train['end_turn_restricted'].value_counts(),labels = train['end_turn_restricted'].unique(),autopct="%.1f%%")
+
+plt.rc('font',family='NanumBarunGothic')
+f = plt.figure(figsize=(15,10))
+ax1, ax2, ax3 = f.subplots(1,3)
+
+ax1.pie(test['day_of_week'].value_counts(),labels = test['day_of_week'].unique(),autopct="%.1f%%")
+ax2.pie(test['start_turn_restricted'].value_counts(),labels = test['start_turn_restricted'].unique(),autopct="%.1f%%")
+ax3.pie(test['end_turn_restricted'].value_counts(),labels = test['end_turn_restricted'].unique(),autopct="%.1f%%")
+
+
+# Correlation analysis with seaborn heatmap
+corr = train.corr()
+
+mask = np.triu(np.ones_like(corr,dtype=bool))
+f, ax = plt.subplots(figsize=(11,11))
+cmap = sns.diverging_palette(220, 20, as_cmap=True)
+sns.heatmap(corr,cmap=cmap,mask=mask,annot=True,fmt=".2f")
+
+
+# *   As we have seen at scatter graph before, start latitude, end latitude and start_longitude, end_longitude is same that we can drop each latitude and longitude 
+# *   Most of the variables have low correlation, however there are few things to keep an eye on
+
+# 1.   road_type & weight_restricted (0.79)
+# 2.   Maximum speed limit & target (0.43)
+# 3. weight_restricted & target (0.29)
+# 4. road_rating & target

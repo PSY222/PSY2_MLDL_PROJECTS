@@ -1,0 +1,260 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import gc
+%matplotlib inline
+
+def csv_to_parquet(csv_path, save_name):
+    df = pd.read_csv(csv_path)
+    df.to_parquet(f'./{save_name}.parquet')
+    del df
+    gc.collect()
+    print(save_name, 'Done.')
+
+csv_to_parquet() # Downloaded on personal computer (Data is not allowed to share due to competition regulation)
+csv_to_parquet()
+
+train = pd.read_parquet('./train.parquet')
+test = pd.read_parquet('./test.parquet')
+
+
+#Transform to dataetime data type
+train['base_date'] = pd.to_datetime(train['base_date'],format="%Y%m%d")
+test['base_date'] = pd.to_datetime(test['base_date'],format="%Y%m%d")
+
+#drop unnecessary columns
+train.drop(['road_in_use','multi_linked','connect_code','height_restricted','vehicle_restricted','end_latitude','end_longitude'],axis=1,inplace=True)
+test.drop(['road_in_use','multi_linked','connect_code','height_restricted','vehicle_restricted','end_latitude','end_longitude'],axis=1,inplace=True)
+
+print("Train data shape is ",train.shape)
+print("Test data shape is ",test.shape)
+
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.compose import make_column_transformer
+from sklearn.preprocessing import LabelEncoder
+
+ohe_num_cols = ['road_type','day_of_week','lane_count','road_rating']
+
+train['source'] = "train"
+test['source'] = "test"
+
+temp = pd.concat([test,train])
+ohe_temp = pd.concat([temp,ohe_df],axis=1)
+ohe_temp.drop(ohe_num_cols,axis=1,inplace=True)
+
+catg_cols = ['start_turn_restricted','end_turn_restricted']
+
+dummies_temp = pd.DataFrame(ohe.fit_transform(ohe_temp[catg_cols]).toarray(),index= ohe_temp.index)
+dummies_temp.columns = ohe.get_feature_names_out()
+
+dummies_temp.shape
+
+
+def categorize(df,col):
+  df.loc[df[col].str.contains("교차로"),col] = "intersect"
+  df.loc[df[col].str.contains("교$|.측",regex=True),col] = "bridge"
+  df.loc[df[col].str.contains("거리$|사거",regex=True),col] = "road"
+  df.loc[df[col].str.contains("주택|아파트$|아파트[0-9]|오피스텔|빌라|맨션|빌리지$|여관"),col] = "living"
+  df.loc[df[col].str.contains("입구$|입$|입구[0-9]$",regex=True),col] = "entrance"
+  df.loc[df[col].str.contains("마을$",regex=True),col] = "village"
+  df.loc[df[col].str.contains("청$|경찰|복지|파출소",regex=True),col] = "government"
+  df.loc[df[col].str.contains("공장|창고|목장|농장",regex=True),col] = "industry"
+  df.loc[df[col].str.contains("^((?!intersect|bridge|living|entrance|government|industry|village|road).)*$",regex=True),col] = "others"
+
+categorize(combined_df,'start_node_name')
+categorize(combined_df,'end_node_name')
+print("After grouping: ",combined_df['start_node_name'].nunique(),'and',combined_df['end_node_name'].nunique())
+
+print("Before grouping: ",combined_df['road_name'].nunique())
+categorize_road(combined_df,'road_name')
+print("After grouping: ",combined_df['road_name'].nunique())
+
+# Process Categorical data
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.compose import make_column_transformer
+
+num_cols = combined_df.select_dtypes(include=['int64','float64']).columns.tolist()
+obj_cols = combined_df.select_dtypes(include=['object']).columns.tolist()
+
+
+ct = make_column_transformer((StandardScaler(),num_cols),(OneHotEncoder(),obj_cols))
+ct.fit(combined_df)
+col_names = num_cols + ct.transformers_[1][1].get_feature_names_out(obj_cols).tolist()
+preprocessed_df = pd.DataFrame(ct.transform(combined_df),columns=col_names)
+
+gc.collect()
+
+#Target columns was excluded from OneHotEncoding, so combine the dataset again
+target_merged_df = preprocessed_df.join(target, how='left')
+target_merged_df.shape
+
+#Separate combined dataset into train and test data again
+train = target_merged_df.loc[target_merged_df['source_train']==1,:]
+test = target_merged_df.loc[target_merged_df['source_test']==1,:]
+
+print(f'train data shape is {train.shape}, test data shape is {test.shape}')
+
+train = train.drop(['source_train','source_test'],axis=1)
+test = test.drop(['source_train','source_test','target'],axis=1)
+
+print(f'train data shape is {train.shape}, test data shape is {test.shape}')
+
+# Model Experiments
+# I have tried several machine learning and tensorflow model,
+# however most of the experiments had to stop in the middle due to lack of RAM....
+# It is pity that I couldn't see the results of some of the models, but it was meaningful for me to build various kinds of models!
+# I'll comment the predicted results for those models that I was able to confirm the results
+
+# Tensorflow simple DNN model
+
+import tensorflow as tf
+from tensorflow import keras
+from tensorflow.keras import layers
+
+def model_building():
+  model = keras.Sequential([
+      layers.Dense(50,activation='relu',input_dim=x_train.shape[1]),
+      layers.Dropout(0.2),
+      layers.Dense(100,activation='relu'),
+      layers.Dropout(0.4),
+      layers.Dense(1)
+  ])
+
+  optimizer = tf.keras.optimizers.RMSprop(0.001)
+  model.compile(loss='mse',optimizer=optimizer,metrics=[tf.keras.metrics.RootMeanSquaredError()])
+  return model
+
+model = model_building()
+model.summary()
+
+example = x_train[:10]
+example_result = model.predict(example)
+example_result
+
+import os
+MODEL_DIR = './model/'
+if not os.path.exists(MODEL_DIR):
+    os.mkdir(MODEL_DIR)
+
+filename = '{epoch:02d}-{val_loss:.2f}.hdf5'
+
+model_checkpoint_callback = tf.keras.callbacks.ModelCheckpoint(filepath=filename,monitor='val_loss',save_best_only=True)
+early_stopping_callback = tf.keras.callbacks.EarlyStopping(monitor='val_loss',patience=10)
+
+history = model.fit(x_train,y_train,epochs=30, batch_size=20,
+                    validation_split=0.2,
+                    callbacks=[early_stopping_callback,model_checkpoint_callback])
+# Best RMSE : 0.4839
+
+#Machine learning models
+n_folds = 5
+
+def rmse(model):
+  kf = KFold(n_folds,shuffle=True,random_state=42).get_n_splits(train.values)
+  rmse = np.sqrt(-cross_val_score(model,x_train,y_train,scoring='neg_mean_squared_error',cv=kf))
+  return rmse
+
+from sklearn.linear_model import ElasticNet, Lasso, Ridge
+from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
+from sklearn.model_selection import cross_val_score,KFold
+import lightgbm as lgb
+import xgboost as xgb
+
+model_lgb = lgb.LGBMRegressor(objective='regression',num_leaves=5,
+                              learning_rate=0.05, n_estimators=720,
+                              max_bin = 55, bagging_fraction = 0.8,
+                              bagging_freq = 5, feature_fraction = 0.2319,
+                              feature_fraction_seed=9, bagging_seed=9,
+                              min_data_in_leaf =6, min_sum_hessian_in_leaf = 11)
+
+lasso = Lasso(alpha=0.0005,random_state=12)
+
+ELNet = ElasticNet(alpha=0.0005,l1_ratio=0.4,random_state=11)
+
+Rg = Ridge(alpha=0.4,random_state=10)
+
+GBR = GradientBoostingRegressor(n_estimators=4000,learning_rate=0.05,max_depth=4,max_features='sqrt',min_samples_split=10)
+
+xgb_m = xgb.XGBRegressor(colsample_bytree=0.4603, gamma=0.0468, 
+                             learning_rate=0.05, max_depth=3, 
+                             min_child_weight=1.7817, n_estimators=2200,
+                             reg_alpha=0.4640, reg_lambda=0.8571,
+                             subsample=0.5213, silent=1,
+                             random_state =7, nthread = -1)
+
+
+'''
+rmse(lasso) array([0.70785874, 0.70765433, 0.70810295, 0.70766365, 0.70791972])
+rmse(ELNet) array([0.70770386, 0.70745235, 0.70792294, 0.70749008, 0.70772522])
+rmse(Rg) array([0.7076432 , 0.70730146, 0.70780776, 0.70740209, 0.70759758])
+
+rmse(GBR)  array([0.5445078 , 0.54463975, 0.54512056, 0.54535376, 0.54478809])
+rmse(model_lgb)  array([0.51892352, 0.52100445, 0.52094264, 0.52213064, 0.52290713])
+rmse(XGB) had TLE
+'''
+
+# Another thing I tried was hyperparameter tuing with Grid Search
+from sklearn.model_selection import GridSearchCV
+from sklearn.model_selection import RandomizedSearchCV
+
+#Ridge params
+Rg = Ridge()
+Ridge_param = {'alpha': [0.1,0.2,0.3,0.4,0.5], 'random_state' :[10]}
+
+#GBR params
+GBR = GradientBoostingRegressor()
+GBR_param = {'n_estimators':[5000,6000],
+             'max_depth':[3,4],
+             'min_samples_split':[20,30],
+             'learning_rate': [0.02,0.05]   
+}
+
+#lgb params
+lgb_m = lgb.LGBMRegressor()
+LGB_param = {'num_leaves': [5,10,15,20],
+             'max_depth': [3,4,5],
+             'learning_rate': [0.02,0.05],
+             'n_estimators':[2000,4000,6000],
+             'min_data_in_leaf': [5,10],
+             'min_gain_to_split':[0,0.2,0.4],
+             'min_sum_hessian_in_leaf': [10,20]
+}
+
+param_list = [Ridge_param,GBR_param,LGB_param]
+clf_list = [Rg,GBR,lgb_m]
+
+for clf,param in zip(clf_list,param_list):
+  gsv = GridSearchCV(estimator =clf, param_grid=param,scoring = 'neg_mean_squared_error')
+  gsv.fit(train_pca,y_train)
+  print(f"{clf}'s best score is {np.sqrt(-gsv.best_score_)} with {gsv.best_params_}")
+
+  rsv = RandomizedSearchCV(clf,param_distributions=param,scoring = 'neg_mean_squared_error')
+  rsv.fit(train_pca,y_train)
+  print(f"{clf}'s best score is {np.sqrt(-rsv.best_score_)} with {rsv.best_params_}")
+
+
+# My initial purpose for trying multiple models were to build ensemble model,,
+# But Stacking model was crashing my colab notebook :(
+# Here are codes I attempted
+
+Rg = Ridge(alpha=0.5,random_state=10)
+lgb_m = lgb.LGBMRegressor(num_leaves=20,max_depth=4,learning_rate=0.05,n_estimators=5000,min_data_in_leaf=10)
+GBR = GradientBoostingRegressor(n_estimators=5000,max_depth=3,learning_rate=0.2)
+
+stacked_reg = StackingCVRegressor(regressors=(Rg,GBR,lgb_m),meta_regressor=lgb_m,use_features_in_secondary=True)
+rmse(stacked_reg)
+
+# I tried to reduce the dimension and data size by PCA, but RAM issue was still ongoing
+from sklearn.decomposition import PCA
+pca = PCA(n_components=5)
+pca.fit(X_train)
+train_pca = pca.transform(X_train)
+test_pca = pca.transform(test)
+
+print(train.shape," became ",train_pca.shape)
+print(test.shape," became ",test_pca.shape)
+
+pca.get_covariance()
+sum(pca.explained_variance_ratio_)
+
+
