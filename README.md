@@ -10,7 +10,7 @@ This repository is still working in progress, so hope you understand!
 
 HAPPY DATA EXPERIMENT ❤
 
-# Project codes overview
+# Project overview
 
 1. Jeju Traffic Forecast _ Regression models (DACON)
 2. UN Big Data Hackathon _ Gradient-Boosting Regression models, basic DNN model (UN)
