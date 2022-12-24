@@ -1,0 +1,352 @@
+import os, sys
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import skimage.io
+from skimage.transform import resize
+from tqdm import tqdm
+import PIL
+from PIL import Image, ImageOps
+import cv2
+from sklearn.utils import class_weight, shuffle
+from keras.losses import binary_crossentropy
+import keras.backend as K
+import tensorflow as tf
+from tensorflow import keras
+from tensorflow.keras import layers
+from sklearn.metrics import f1_score
+from keras.utils import Sequence
+from keras.utils import to_categorical
+from sklearn.model_selection import train_test_split
+import random
+import sys
+import gc
+
+from keras.utils.np_utils import to_categorical
+from keras.models import Sequential
+from keras.layers import Dense, Dropout, Flatten, Conv2D, MaxPool2D, BatchNormalization, GlobalAveragePooling2D
+from keras.callbacks import LearningRateScheduler,EarlyStopping
+from keras.utils import load_img
+
+import warnings
+warnings.filterwarnings("ignore")
+
+test_img = '/content/test_imgs'
+train_img = '/content/train_imgs'
+
+train = pd.read_csv('/content/train.csv',usecols =['ID','N_category'])
+test = pd.read_csv('/content/test.csv',usecols =['ID'])
+sample = pd.read_csv('/content/sample_submission.csv')
+
+# max_h = max_w = 0
+# min_h = min_w = 10000
+# for i in os.listdir(train_img):
+#   sample = cv2.imread(os.path.join(train_img,i))
+#   max_h = max(sample.shape[0],max_h)
+#   max_w = max(sample.shape[1],max_w)
+#   min_h = min(sample.shape[0],min_h)
+#   min_w = min(sample.shape[1],min_w)
+# print(f"Train image size height ranges from {min_h} to {max_h}")
+# print(f"Train image size width ranges from {min_w} to {max_w}")
+
+class ModelParameter:
+    
+    def __init__(self, basepath,
+                 layers = 1,
+                 batch_size=64,
+                  n_channels=3,
+                 scaled_row_dim=260,
+                 scaled_col_dim=520,
+                 shuffle=False,
+                 n_epochs=10):
+        self.basepath = basepath
+        self.batch_size = batch_size
+        self.n_channels = n_channels
+        self.shuffle = shuffle
+        self.scaled_row_dim = 216  #Try 1/6 size of the original setting
+        self.scaled_col_dim = 466
+        self.n_epochs = n_epochs
+        self.layers = layers
+
+parameter = ModelParameter(train_img)
+
+import inspect
+from PIL import Image, ImageEnhance, ImageOps
+
+class ImagePreprocessor:
+    
+    def __init__(self, modelparameter):
+        self.parameter = modelparameter
+        self.basepath = self.parameter.basepath
+        self.scaled_row_dim = self.parameter.scaled_row_dim
+        self.scaled_col_dim = self.parameter.scaled_col_dim
+        self.n_channels = self.parameter.n_channels
+        self.layers = self.parameter.layers
+
+    def random_augment(self,image):
+        functions = {'Color': self.color,
+                     'Contrast': self.contrast,
+                      'Brightness': self.brightness,
+                      'Rotate': self.rotate,
+                      'Identity': self.identity,
+                      # 'Equalize': self.equalize,
+                      'Sharpness': self.sharpness,
+                      'ShearX': self.shear_x,
+                      'ShearY': self.shear_y,
+                      'TranslateX': self.translate_x,
+                      'TranslateY': self.translate_y,
+                      "AutoContrast": self.autocontrast}
+
+        #'Equalize' 제외
+        available_ops = ['Color','Contrast', 'Brightness','Rotate', 'Identity', 'Sharpness','ShearY', 'TranslateX','TranslateY','AutoContrast']  
+        #Resize and conduct 
+        for lay in range(self.layers):
+          select = np.random.randint(0,len(available_ops))
+          for op_name in random.sample(available_ops,select):
+            func, args = self.put_args(op_name,functions)
+            image = func(np.uint8(image),*args)
+        return np.array(image)/255.0
+
+
+    def put_args(self,name,functions):
+        Func = functions[name]
+        args = tuple()
+        if "factor" in inspect.getargspec(Func)[0]:
+          args = tuple(list(args) + [np.random.uniform(0.14,1.4)])
+        # if "sigmaX" in inspect.getargspec(Func)[0]:
+        #   args = tuple(list(args) +[np.random.randint(10,15)])
+        if "degrees" in inspect.getargspec(Func)[0]:
+          args = tuple(list(args) +[np.random.randint(-5,5)])
+        if "level" in inspect.getargspec(Func)[0]:
+          args = tuple(list(args) +[np.random.uniform(-0.1,0.1)])
+        if "pixels" in inspect.getargspec(Func)[0]:
+          args = tuple(list(args) +[np.random.uniform(-7.0,7.0)])  
+        return (Func, args)
+
+    def color(self,image, factor):
+        image = Image.fromarray(image,'RGB')
+        image = ImageEnhance.Color(image).enhance(factor) 
+        return  image
+
+    def contrast(self,image, factor):
+        image = Image.fromarray(image,'RGB')
+        image = ImageEnhance.Contrast(image).enhance(factor)
+        return image
+       
+    def brightness(self,image, factor):
+        image = Image.fromarray(image,'RGB')
+        image = ImageEnhance.Brightness(image).enhance(factor)
+        return image
+    
+    def rotate(self,image,degrees):
+        image = Image.fromarray(image,'RGB')
+        image =  image.rotate(angle=degrees)
+        return image
+      
+    def identity(self,image):
+        return image
+      
+    # def equalize(self,image):
+    #     image = Image.fromarray(image,'RGB')
+    #     image =  ImageOps.equalize(image) 
+    #     return image
+      
+    def sharpness(self,image, factor):
+        image = Image.fromarray(image,'RGB')
+        image =  ImageEnhance.Sharpness(image).enhance(factor)
+        return image
+      
+    def shear_x(self,image, level):
+        image = Image.fromarray(image,'RGB')
+        image=image.transform(image.size, Image.AFFINE, (1, level, 0, 0, 1, 0), Image.BICUBIC)
+        return image
+  
+    def shear_y(self,image, level):
+        image = Image.fromarray(image,'RGB')
+        image=image.transform(image.size, Image.AFFINE, (1, 0, 0,level,  1, 0), Image.BICUBIC)
+        return image
+  
+    def translate_x(self,image, pixels):
+        image = Image.fromarray(image,'RGB')
+        image=image.transform(image.size, Image.AFFINE, (1, 0,pixels, 0, 1, 0))
+        return image
+  
+    def translate_y(self,image, pixels):
+        image = Image.fromarray(image,'RGB')
+        image=image.transform(image.size, Image.AFFINE, (1, 0, 0, 0, 1, pixels))
+        return image
+
+    def autocontrast(self,image):
+        image = Image.fromarray(image,'RGB')
+        image =  ImageOps.autocontrast(image)
+        return image
+    
+    def load_image(self, image_id):
+        image = cv2.imread(self.basepath + '/'+image_id+'.png')
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        image = cv2.resize(image, (self.scaled_col_dim,self.scaled_row_dim))
+        return image
+        
+preprocessor = ImagePreprocessor(parameter)
+image = preprocessor.load_image('BC_01_0004')
+plt.imshow(preprocessor.random_augment(image))   # Applied one layer
+
+class BaseLineModel:
+    
+    def __init__(self, modelparameter):
+        self.params = modelparameter
+        self.img_rows = self.params.scaled_row_dim
+        self.img_cols = self.params.scaled_col_dim
+        self.n_channels = self.params.n_channels
+        self.input_shape = (self.img_rows, self.img_cols, self.n_channels)
+        self.my_metrics =['accuracy']
+    
+    def build_model(self):
+        self.model = Sequential()
+        self.model.add(Conv2D(32, kernel_size = 3, activation='relu', input_shape = self.input_shape))
+        #self.model.add(Conv2D(32, kernel_size = 3, strides=(2,2),activation='relu'))
+        #self.model.add(Conv2D(64, kernel_size = 3, activation='relu'))
+        #self.model.add(Conv2D(64, kernel_size = 3, strides=(2,2),activation='relu'))
+        #self.model.add(MaxPool2D(pool_size=(2,2),padding='valid'))
+        self.model.add(Conv2D(128, kernel_size = 3, activation='relu'))
+        self.model.add(Conv2D(128, kernel_size = 3, activation='relu'))
+        #self.model.add(Conv2D(256, kernel_size = 3, activation='relu'))
+        #self.model.add(MaxPool2D(pool_size=(2,2),padding='valid'))
+        #self.model.add(Conv2D(256, kernel_size = 3, activation='relu'))
+        #self.model.add(Conv2D(512, kernel_size = 14, activation='relu'))
+        #self.model.add(Dropout(0.6))
+        self.model.add(GlobalAveragePooling2D())
+        self.model.add(Dense(512,activation="relu"))
+        self.model.add(Dense(1, activation='sigmoid'))
+    
+    def summary(self):
+        self.model.summary()
+
+    def compile_model(self):
+        self.model.compile(loss=keras.losses.binary_crossentropy,optimizer="adam", metrics=self.my_metrics)
+    
+    def set_generators(self, train_generator, validation_generator):
+        self.training_generator = train_generator
+        self.validation_generator = validation_generator
+    
+    def learn(self):
+        return self.model.fit_generator(generator=self.training_generator,
+                    validation_data=self.validation_generator,
+                    epochs=self.params.n_epochs, 
+                    use_multiprocessing=True,
+                    workers=8)
+    
+    def score(self):
+        return self.model.evaluate_generator(generator=self.validation_generator,
+                                      use_multiprocessing=True, 
+                                      workers=8)
+    
+    def predict(self, predict_generator):
+        y = predict_generator.predict(self.model)
+        return y
+    
+    def save(self, modeloutputpath):
+        self.model.save(modeloutputpath)
+    
+    def load(self, modelinputpath):
+        self.model = load_model(modelinputpath)
+
+class DataGenerator(keras.utils.Sequence):
+    
+    def __init__(self, list_IDs, labels, modelparameter, imagepreprocessor):
+        self.current_epoch = 0
+        self.params = modelparameter
+        self.labels = labels
+        self.list_IDs = list_IDs
+        self.dim = (self.params.scaled_row_dim, self.params.scaled_col_dim)
+        self.batch_size = self.params.batch_size
+        self.n_channels = self.params.n_channels
+        self.shuffle = self.params.shuffle
+        self.preprocessor = imagepreprocessor
+        self.on_epoch_end()
+    
+    def on_epoch_end(self):
+        self.indexes = np.arange(len(self.list_IDs))
+        if self.shuffle == True:
+            np.random.shuffle(self.indexes, random_state=self.current_epoch)
+            self.current_epoch += 1
+    
+    def get_targets_per_image(self, identifier):
+        return self.labels.loc[self.labels.ID==identifier,'N_category'].values
+            
+    def __data_generation(self, list_IDs_temp):
+        'Generates data containing batch_size samples' # X : (n_samples, *dim, n_channels)
+        # Initialization
+        X = np.empty((self.batch_size, *self.dim, self.n_channels))
+        y = np.empty((self.batch_size), dtype=int)
+        # Generate data
+        for i, identifier in enumerate(list_IDs_temp):
+            # Store sample
+            image = self.preprocessor.load_image(identifier)
+            image = self.preprocessor.random_augment(image)
+            X[i] = image
+            # Store class
+            y[i] = self.get_targets_per_image(identifier)
+        return X, y
+    
+    def __len__(self):
+        'Denotes the number of batches per epoch'
+        return int(np.floor(len(self.list_IDs) / self.batch_size))
+    
+    def __getitem__(self, index):
+        'Generate one batch of data'
+        # Generate indexes of the batch
+        indexes = self.indexes[index*self.batch_size:(index+1)*self.batch_size]
+        # Find list of IDs
+        list_IDs_temp = [self.list_IDs[k] for k in indexes]
+        # Generate data
+        X, y = self.__data_generation(list_IDs_temp)
+        return X, y
+        
+ class PredictGenerator:
+    
+    def __init__(self, predict_Ids, imagepreprocessor, predict_path):
+        self.preprocessor = imagepreprocessor
+        self.preprocessor.basepath = predict_path
+        self.identifiers = predict_Ids
+    
+    def predict(self, model):
+        y = np.empty(shape=(len(self.identifiers)))
+        for n in range(len(self.identifiers)):
+            image = self.preprocessor.load_image(self.identifiers[n])
+            image = self.preprocessor.random_augment(image)
+            image = image.reshape((1, *image.shape))
+            y[n] = model.predict(image)
+        return y
+        
+  
+from sklearn.model_selection import RepeatedKFold
+
+splitter = RepeatedKFold(n_splits=4, n_repeats=1, random_state=0)
+test_names = sample.ID.values
+partitions = []
+
+for train_idx, val_idx in splitter.split(train.index.values):
+    partition = {}
+    partition["train"] = train.ID.values[val_idx]
+    partition["validation"] = train.ID.values[val_idx]
+    partitions.append(partition)
+    print("TRAIN:", len(train_idx), "TEST:", len(val_idx))
+  
+training_generator = DataGenerator(partition['train'], train, parameter, preprocessor)
+validation_generator = DataGenerator(partition['validation'], train, parameter, preprocessor)
+
+predict_generator = PredictGenerator(partition['validation'], preprocessor, train_img)
+
+test_preprocessor = ImagePreprocessor(parameter)
+submission_predict_generator = PredictGenerator(test_names, test_preprocessor, test_img)
+validation_labels = train.loc[train.ID.isin(partition["validation"])].copy()
+
+model = BaseLineModel(parameter)
+model.build_model()
+model.compile_model()
+model.set_generators(training_generator, validation_generator)
+history = model.learn()
+
+submission_proba_predictions = model.predict(submission_predict_generator)
+submission = pd.DataFrame(index = sample['ID'],data=submission_proba_predictions,columns=['ID','N_category'])
