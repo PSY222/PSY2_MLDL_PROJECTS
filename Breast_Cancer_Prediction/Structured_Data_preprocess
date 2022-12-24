@@ -1,0 +1,183 @@
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from PIL import Image
+import seaborn as sns
+%matplotlib inline
+import os
+import cv2
+import gc
+
+from catboost import CatBoostClassifier
+from sklearn.ensemble import RandomForestClassifier, AdaBoostClassifier, GradientBoostingClassifier, ExtraTreesClassifier, VotingClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import GridSearchCV, cross_val_score, StratifiedKFold, learning_curve
+from sklearn.svm import SVC
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn.preprocessing import LabelEncoder, OneHotEncoder
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+
+import gc
+
+train = pd.read_csv('/content/train.csv')
+test = pd.read_csv('/content/test.csv')
+sample = pd.read_csv('/content/sample_submission.csv')
+info = pd.read_excel('/content/clinical_info.xlsx')
+
+train = train.drop(['mask_path'],axis=1)
+
+test_img = '/content/test_imgs'
+train_img = '/content/train_imgs'
+#train_masks = '/content/train_masks'
+
+eng_name = {'나이':'age','수술연월일':'date','진단명':'diagnosis','암의 위치':'location',
+            '암의 개수':'number','암의 장경':'size','DCIS_or_LCIS_여부':'DCIS_or_LCIS'}
+
+train = train.rename(columns=eng_name)
+test = test.rename(columns=eng_name)
+
+train = train.drop([ 'DCIS_or_LCIS_type','HER2_SISH','HER2_SISH_ratio','BRCA_mutation'],axis=1)
+test = test.drop([ 'DCIS_or_LCIS_type','HER2_SISH','HER2_SISH_ratio','BRCA_mutation'],axis=1)
+#Drop the columns with 80-90% of null value ratio
+
+train_cut = len(train)
+combined_df = pd.concat([train,test],axis=0).reset_index(drop=True)
+combined_df.shape
+
+null_cnt = combined_df.isnull().sum() *100/ len(combined_df)
+total_null = null_cnt[null_cnt>0]
+
+# Drop the columns with high null ratio 
+# ER_Allred_score     37.2
+# KI-67_LI_percent    28.7
+# PR_Allred_score     57.0
+
+# High multicollinearity feature can also be considered - size & T-Category / NG & H2_score_2
+
+combined_df = combined_df.drop(['ER_Allred_score','KI-67_LI_percent','PR_Allred_score'], axis=1)
+null_cnt = combined_df.isnull().sum() *100/ len(combined_df)
+total_null_temp = null_cnt[null_cnt>0]
+
+#We can check the distribution of each columns 
+for i,name in enumerate(['size', 'NG', 'HG', 'HG_score_1', 'HG_score_2', 'HG_score_3','T_category', 'ER', 'PR', 'HER2', 'HER2_IHC']):
+  fig = plt.figure(figsize=(7,5))
+  g = sns.kdeplot(combined_df[name][(combined_df["N_category"] == 0)], color="Red", shade = True)
+  g = sns.kdeplot(combined_df[name][(combined_df["N_category"] == 1)], ax =g, color="Blue", shade= True)
+  g.set_xlabel(name)
+  g.set_ylabel("Frequency")
+  plt.legend(["good","Bad"])
+  plt.title(f"Distribtution of {name} (skew:{round(combined_df[name].skew(),2)})")
+  plt.show()
+ 
+null_cols =[ 'size', 'NG', 'HG', 'HG_score_1', 'HG_score_2', 'HG_score_3','T_category', 'ER', 'PR', 'HER2', 'HER2_IHC']
+
+# Let's look into corr heatmap again to find a connection between other features and null valued features 
+f,ax = plt.subplots(figsize=(18, 12))
+mask = np.triu(np.ones_like(combined_df[null_cols].corr()))
+sns.heatmap(combined_df[null_cols].corr(), annot=True, linewidths=.5, mask = mask, cmap ="YlGnBu",fmt= '.1f',ax=ax)
+
+sns.factorplot(y="size",x="T_category",hue="HG", data=combined_df,kind="box")
+
+fig = plt.figure(figsize=(20,15))
+for i,col in enumerate(['HG', 'HG_score_1', 'HG_score_2', 'HG_score_3']):
+  ax = fig.add_subplot(2,2,i+1)
+  ax = sns.violinplot(x=col,y='NG',data=combined_df)
+  ax.set_title(f'Relationship with NG and {col}')
+
+plt.subplots_adjust(wspace=0.2,hspace=0.3)
+plt.show()
+#sns.pairplot(combined_df[['NG','HG', 'HG_score_1', 'HG_score_2', 'HG_score_3','N_category']],hue='N_category',corner=True,palette='husl')
+
+fig = plt.figure(figsize=(12,7))
+for i,col in enumerate(['HG_score_1', 'HG_score_2', 'HG_score_3']):
+  ax = fig.add_subplot(1,3,i+1)
+  ax = sns.violinplot(x=col,y='HG',data=combined_df)
+  ax.set_title(f'Relationship with HG and {col}')
+
+plt.subplots_adjust(wspace=0.2,hspace=0.3)
+plt.show()
+
+sns.catplot(data=combined_df, x="ER", hue="PR",kind='count')
+sns.catplot(data=combined_df, x="HER2_IHC", hue="HER2",kind='count')
+
+#There are only 5 missing values at T_category, so we can simply look into data
+combined_df[combined_df['T_category'].isnull()]
+
+# 4 among 5 records are diagnosed as positive(Lymph node propagation occurred)
+# We can investigate the most frequent value of T_category with similar conditions
+combined_df.loc[(combined_df['size']==0.0)&(combined_df['location']==2)&(combined_df['diagnosis']==1)] 
+combined_df.loc[(combined_df['size']==0.0),:]
+combined_df['T_category'].fillna(0.0,inplace=True)
+combined_df['T_category'].isnull().sum()
+#There are only 6 cases with size 0.0 and 5 of them has NaN value. We can replace nan value with 0.0 considering the small amount of nan values and strong correlationship with size
+
+# Now we are moving on to preprocessing nan value of size
+#All of the T_category values with NaN 'size' column is 0.0
+size_nan_index = combined_df.loc[combined_df['size'].isnull(),'size'].index.to_list()
+combined_df.loc[size_nan_index,'T_category'].value_counts()
+
+# It is interesting that among 82 nan values of 'size' has common 78 'nan' values with HG, HG_score_1, HG_score_2,HG_score3
+(combined_df[(combined_df['HG'].isna())&(combined_df['size'].isna())].index == combined_df[(combined_df['HG_score_1'].isna()) & (combined_df['size'].isna())].index).all()
+(combined_df[(combined_df['HG_score_1'].isna()) & (combined_df['size'].isna())].index==  combined_df[(combined_df['HG_score_2'].isna()) & (combined_df['size'].isna())].index).all()
+(combined_df[(combined_df['HG_score_2'].isna()) & (combined_df['size'].isna())].index == combined_df[(combined_df['HG_score_3'].isna()) & (combined_df['size'].isna())].index).all()
+
+Nan78_df = combined_df[(combined_df['HG'].isna())&(combined_df['size'].isna())&(combined_df['HG_score_1'].isna())&(combined_df['HG_score_2'].isna())&(combined_df['HG_score_3'].isna())]
+fig = plt.figure(figsize=(12,7))
+for idx,c in enumerate([ 'diagnosis', 'location', 'number', 'NG', 'DCIS_or_LCIS', 'T_category', 'ER', 'PR', 'HER2', 'HER2_IHC']):
+  ax = fig.add_subplot(2,5,idx+1)
+  ax.pie(Nan78_df[c].value_counts().to_list(),labels =Nan78_df[c].value_counts().index,autopct='%.1f%%')
+  ax.set_title(f'{c}')
+plt.tight_layout()
+plt.show()
+
+# By drawing pie chart of common distribution of other features, we can narrow down the coditions to calculate nan values
+# Fist, I will make a conditions with more than 95% of particular values
+# However, there are only about 1 or 2 non nan values that fits the condition that we adjust few conditions
+expr1  = combined_df[(combined_df['diagnosis']==1)&(combined_df['number']==1)&(combined_df['DCIS_or_LCIS']==1)&(combined_df['T_category']==0.0)&(combined_df['HER2']==0.0)]
+expr1['size'].value_counts(), expr1['HG'].value_counts(), expr1['HG_score_1'].value_counts(), expr1['HG_score_2'].value_counts(),expr1['HG_score_3'].value_counts()
+
+expr2  = combined_df[(combined_df['diagnosis']==1)&(combined_df['number']==1)&(combined_df['DCIS_or_LCIS']==1)&(combined_df['T_category']==0.0)]
+expr2['size'].value_counts(), expr2['HG'].value_counts(), expr2['HG_score_1'].value_counts(), expr2['HG_score_2'].value_counts(),expr2['HG_score_3'].value_counts()
+
+expr3  = combined_df[(combined_df['diagnosis']==1)&(combined_df['number']==1)&(combined_df['DCIS_or_LCIS']==1)]
+expr3['size'].value_counts(), expr3['HG'].value_counts(), expr3['HG_score_1'].value_counts(), expr3['HG_score_2'].value_counts(),expr3['HG_score_3'].value_counts()
+
+expr4  = combined_df[(combined_df['diagnosis']==1)&(combined_df['T_category']==0.0)&(combined_df['DCIS_or_LCIS']==1)]
+expr4['size'].value_counts(), expr4['HG'].value_counts(), expr4['HG_score_1'].value_counts(), expr4['HG_score_2'].value_counts(),expr4['HG_score_3'].value_counts()
+
+for ind in Nan78_df.index.to_list():
+  combined_df['HG'].iloc[ind] = 2.0
+  combined_df['HG_score_1'].iloc[ind] = 2.0
+  combined_df['HG_score_2'].iloc[ind] = 2.0
+  combined_df['HG_score_3'].iloc[ind] = 3.0
+
+#size = > 0.0
+combined_df['size'].fillna(0.0,inplace=True)
+combined_df['ER'] = combined_df['ER'].fillna(combined_df['ER'].mode()[0])
+combined_df['PR'] = combined_df['PR'].fillna(combined_df['ER'].mode()[0])
+
+combined_df['HER2_IHC'].fillna(0.0,inplace=True)
+combined_df['HER2'].fillna(2.0,inplace=True)
+
+# One notable point about HG and HG score 1,2,3 is that it assigns 'not graded' value as '4'
+# Since we are going to use classification model, I'll fill HG related values as 'not graded'
+combined_df['HG'].fillna(4.0,inplace=True)
+combined_df['HG_score_1'].fillna(4.0,inplace=True)
+combined_df['HG_score_2'].fillna(4.0,inplace=True)
+combined_df['HG_score_3'].fillna(4.0,inplace=True)
+
+ng_na = combined_df[combined_df['NG'].isna()].index.to_list()
+for ind in ng_na:
+  if combined_df['HG_score_2'].iloc[ind] == 1.0:
+    combined_df['NG'].iloc[ind] = 1.0
+  if combined_df['HG_score_2'].iloc[ind] == 2.0:
+    combined_df['NG'].iloc[ind] = 2.0
+  if combined_df['HG_score_2'].iloc[ind] == 3.0:
+    combined_df['NG'].iloc[ind] = 3.0
+  if combined_df['HG_score_2'].iloc[ind] == 4.0:
+    combined_df['NG'].iloc[ind] = 2.0  ]
+  
+  combined_df.isnull().sum()
