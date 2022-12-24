@@ -12,6 +12,7 @@ HAPPY DATA EXPERIMENT ❤
 
 # Project codes overview
 
-1. Jeju Traffic Forecast (DACON)
-2. UN Big Data Hackathon (UN)
-3. To be updated...
+1. Jeju Traffic Forecast _ Regression models (DACON)
+2. UN Big Data Hackathon _ Gradient-Boosting Regression models, basic DNN model (UN)
+3. Breast cancer lymph node metastasis prediction contest(Computer Vision) - CNN models (DACON)
+To be updated...
