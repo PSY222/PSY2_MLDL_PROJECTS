@@ -1,0 +1,199 @@
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from PIL import Image
+import seaborn as sns
+%matplotlib inline
+import os
+import cv2
+import gc
+
+from catboost import CatBoostClassifier
+from sklearn.ensemble import RandomForestClassifier, AdaBoostClassifier, GradientBoostingClassifier, ExtraTreesClassifier, VotingClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import GridSearchCV, cross_val_score, KFold, learning_curve
+from sklearn.svm import SVC
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
+from sklearn.compose import make_column_transformer
+from sklearn.pipeline import Pipeline
+
+import gc
+
+train = pd.read_csv('/content/train.csv')
+test = pd.read_csv('/content/test.csv')
+sample = pd.read_csv('/content/sample_submission.csv')
+info = pd.read_excel('/content/clinical_info.xlsx')
+
+eng_name = {'나이':'age','수술연월일':'date','진단명':'diagnosis','암의 위치':'location',
+            '암의 개수':'number','암의 장경':'size','DCIS_or_LCIS_여부':'DCIS_or_LCIS'}
+
+#Combine the dataset for the consistent preprocessing
+# In this version, we will run the separate classification model excluding image data, that we drop the mask,img path
+train_cut = len(train)
+combined_df = pd.concat([train,test],axis=0).reset_index(drop=True)
+combined_df = combined_df.rename(columns=eng_name)
+combined_df.shape
+
+#Drop the columns with 30-90 % null ratio,date,maks/img_path
+combined_df = combined_df.drop(['ID','date','DCIS_or_LCIS_type','HER2_SISH','HER2_SISH_ratio','BRCA_mutation','ER_Allred_score','KI-67_LI_percent','PR_Allred_score','mask_path','img_path'], axis=1)
+
+# Fill the nan values (Refer to Non-image feature preproces)
+combined_df['T_category'].fillna(0.0,inplace=True)
+
+Nan78_df = combined_df[(combined_df['HG'].isna())&(combined_df['size'].isna())&(combined_df['HG_score_1'].isna())&(combined_df['HG_score_2'].isna())&(combined_df['HG_score_3'].isna())]
+for ind in Nan78_df.index.to_list():
+  combined_df['HG'].iloc[ind] = 2.0
+  combined_df['HG_score_1'].iloc[ind] = 2.0
+  combined_df['HG_score_2'].iloc[ind] = 2.0
+  combined_df['HG_score_3'].iloc[ind] = 3.0
+
+combined_df['size'].fillna(0.0,inplace=True)
+combined_df['ER'] = combined_df['ER'].fillna(combined_df['ER'].mode()[0])
+combined_df['PR'] = combined_df['PR'].fillna(combined_df['ER'].mode()[0])
+combined_df['HER2_IHC'].fillna(0.0,inplace=True)
+combined_df['HER2'].fillna(2.0,inplace=True)
+
+combined_df['HG'].fillna(4.0,inplace=True)
+combined_df['HG_score_1'].fillna(4.0,inplace=True)
+combined_df['HG_score_2'].fillna(4.0,inplace=True)
+combined_df['HG_score_3'].fillna(4.0,inplace=True)
+
+ng_na = combined_df[combined_df['NG'].isna()].index.to_list()
+for ind in ng_na:
+  if combined_df['HG_score_2'].iloc[ind] == 1.0:
+    combined_df['NG'].iloc[ind] = 1.0
+  if combined_df['HG_score_2'].iloc[ind] == 2.0:
+    combined_df['NG'].iloc[ind] = 2.0
+  if combined_df['HG_score_2'].iloc[ind] == 3.0:
+    combined_df['NG'].iloc[ind] = 3.0
+  if combined_df['HG_score_2'].iloc[ind] == 4.0:
+    combined_df['NG'].iloc[ind] = 2.0  
+    
+  
+train = combined_df[:train_cut]
+test = combined_df[train_cut:]
+test.drop(['N_category'],axis=1,inplace=True)
+
+#Separate train, test dataset
+y_train = train['N_category']
+x_train = train.drop(['N_category'],axis=1)
+
+KFold = KFold(n_splits=10)
+rs = 42
+clf = [SVC(random_state=rs),
+       DecisionTreeClassifier(random_state=rs),
+       AdaBoostClassifier(DecisionTreeClassifier(random_state=rs),random_state=rs,learning_rate=0.01),
+       RandomForestClassifier(random_state=rs),
+       ExtraTreesClassifier(random_state=rs),
+       GradientBoostingClassifier(random_state=rs),
+       KNeighborsClassifier(),
+       LogisticRegression(random_state=rs,solver='lbfgs', max_iter=300),
+       CatBoostClassifier(learning_rate=0.05)]
+
+result = []
+for c in clf:
+  result.append(np.mean(cross_val_score(c,x_train,y_train,scoring='f1',cv=KFold)))
+
+
+res_df = pd.DataFrame({'f1_score':result,"models":['svc','dtc','ada','rfc','etc','gbc','knn','lr','cbc']})
+
+# Among 9 cross validated models, we are going to try hyperparameter tuning of Top5 models
+#==> Logistic Regression, CatboostingClassifier, SupportVectorClassifier,RandomForestClassifier, ExtraTreeClassifier
+
+
+#models
+LR = LogisticRegression()
+CBC = CatBoostClassifier()
+SV = SVC()
+RFC = RandomForestClassifier()
+ET= ExtraTreesClassifier()
+
+#parameters
+LR_param = {'C':[1.0,0.8,0.6],
+            'max_iter':[100,200,300]}
+
+
+CBC_param = {'learning_rate': [0.02,0.05,0.08,0.1]}
+
+SV_param = {'kernel': ['rbf'], 
+            'C':[1.0,0.8,0.6],
+            'gamma': ['auto','scale']}
+
+RFC_param  = {"max_depth": [None],
+              "max_features": [1, 3, 10],
+              "min_samples_split": [2, 3, 10],
+              "min_samples_leaf": [1, 3, 10],
+              "n_estimators" :[100,300],
+              "criterion": ["gini"]}
+
+ET_param= {"max_depth": [None],
+              "max_features": [1, 3, 10],
+              "min_samples_split": [2, 3, 10],
+              "min_samples_leaf": [1, 3, 10],
+              "bootstrap": [False],
+              "n_estimators" :[100,300],
+              "criterion": ["gini"]}
+
+
+models = [LR,CBC,SV,RFC,ET]
+params = [LR_param,CBC_param,SV_param,RFC_param,ET_param]
+
+res_df.sort_values(by='f1_score',ascending=False) # Compared to MinMaxscaled df, standardscaled df showed better performance except KNeighbors classifer
+
+def plot_learning_curve(estimator, title, X, y, ylim=None, cv=None,
+                        n_jobs=-1, train_sizes=np.linspace(.1, 1.0, 5)):
+    """Generate a simple plot of the test and training learning curve"""
+    plt.figure()
+    plt.title(title)
+    if ylim is not None:
+        plt.ylim(*ylim)
+    plt.xlabel("Training examples")
+    plt.ylabel("Score")
+    train_sizes, train_scores, test_scores = learning_curve(
+        estimator, X, y, cv=cv, n_jobs=n_jobs, train_sizes=train_sizes)
+    train_scores_mean = np.mean(train_scores, axis=1)
+    train_scores_std = np.std(train_scores, axis=1)
+    test_scores_mean = np.mean(test_scores, axis=1)
+    test_scores_std = np.std(test_scores, axis=1)
+    plt.grid()
+
+    plt.fill_between(train_sizes, train_scores_mean - train_scores_std,
+                     train_scores_mean + train_scores_std, alpha=0.1,
+                     color="r")
+    plt.fill_between(train_sizes, test_scores_mean - test_scores_std,
+                     test_scores_mean + test_scores_std, alpha=0.1, color="g")
+    plt.plot(train_sizes, train_scores_mean, 'o-', color="r",
+             label="Training score")
+    plt.plot(train_sizes, test_scores_mean, 'o-', color="g",
+             label="Cross-validation score")
+
+    plt.legend(loc="best")
+    return plt
+
+model_names = ["LR","CBC","SV","RFC","ET"]
+Best_models = [LogisticRegression(C=0.6),
+               CatBoostClassifier(learning_rate=0.05),
+                SVC(C=0.8, gamma='auto'),
+               RandomForestClassifier(max_features=1, min_samples_leaf=3, min_samples_split=3,n_estimators=300),
+               ExtraTreesClassifier(max_features=1, min_samples_split=10)]
+
+for name,estimator in zip(model_names,Best_models):
+  g = plot_learning_curve(estimator,f"{name} learning curves",x_train,y_train,cv=KFold)
+  
+  
+model_names = ["LR","CBC","SV","RFC","ET"]
+Best_models = [LogisticRegression(C=0.6),
+               CatBoostClassifier(learning_rate=0.05),
+                SVC(C=0.8, gamma='auto',probability=True),
+               RandomForestClassifier(max_features=1, min_samples_leaf=3, min_samples_split=3,n_estimators=300),
+               ExtraTreesClassifier(max_features=1, min_samples_split=10)]
+
+voting = VotingClassifier(estimators=list(zip(model_names,Best_models)),voting='hard',n_jobs=4)
+voting = voting.fit(x_train,y_train)
+
+pred = pd.Series(voting.predict(test))
+sample['N_category'] = pred
+sample.to_csv("Hard ensemble model_non_image_data_MinMaxScaler.csv",index=False)
