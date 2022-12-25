@@ -3,17 +3,20 @@
 This is where I store project codes that I experiment for the data science competitions :)
 I'm trying to experience as much data science competitions as I can to improve my skill.
 
-The whole codes will include overall pipeline including EDA to final stage of modelling machine learning/deep learning algorithms.
-I am planning to manage this repository to manage different versions of experiments for the competition.
+The codes will include overall pipeline including EDA to the final stage of modelling machine learning/deep learning algorithms. If there are any mistakes or improvements to make, feel free to pull request!
 
-This repository is still working in progress, so hope you understand!
+![image](https://user-images.githubusercontent.com/86555104/209467922-d75804c8-04bf-4c14-85f2-9fd4fffa412b.png)
+
+✔ Project Listing
+
+| Competition Title | Model Overview |Organizer|
+|-------------------|------------------|---------|
+|Jeju Traffic Forecast|Regression models|DACON|
+|UN Big Data Hackathon|GBR, basic DNN|UN Statistics|
+|Breast cancer lymph node metastasis prediction contest| CNN|DACON|
 
 HAPPY DATA EXPERIMENT ❤
 
-# Project overview
-
-1. Jeju Traffic Forecast _ Regression models (DACON)
-2. UN Big Data Hackathon _ Gradient-Boosting Regression models, basic DNN model (UN)
-3. Breast cancer lymph node metastasis prediction contest(Computer Vision) - CNN models (DACON)
-
 To be updated...
+
+
