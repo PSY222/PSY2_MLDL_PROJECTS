@@ -16,7 +16,7 @@ I planned for the approach in two-stage. The first stage is making a prediction 
 
 ![image](https://user-images.githubusercontent.com/86555104/209469670-4a9f6c38-5a1c-4ea7-9d8c-f455268818ba.png)
 
-The biggest issue in the structured dataset was severe a null ratio of the data. 15 columns out of 23 features had null values ranging from 0.1% up to 90%. Columns with 80-90% were dropped, but I had to be cautious with the data with 20-50% of null ratio data which can lose the information. After checking overlapped null values over the several columns with strong correlation, I was able to discover the reasonable substitute value for the NaN. (For example, 82 nan values of 'size' has common 78 'nan' values with HG, HG_score_1, HG_score_2,HG_score3)
+The biggest issue in the structured dataset was severe null ratio of the data. 15 columns out of 23 features had null values ranging from 0.1% up to 90%. Columns with 80-90% were dropped, but I had to be cautious with the data with 20-50% of null ratio data which can lose the information. After checking overlapped null values over the several columns with strong correlation, I was able to discover the reasonable substitute value for the NaN. (For example, 82 nan values of 'size' has common 78 'nan' values with HG, HG_score_1, HG_score_2,HG_score3)
 
 I initially trained various kinds of model to find the base models suitable for the ensemble. LogisticRegression, CatBoostClassifier, SVC(Support Vector Classifier), RandomForestClassifierm ExtraTreeClassifier showed fair performance. These models were retrained with the hyperparameters resulted from GridSearchCV. After testing both soft voting and hard voting method, hard voting showed slightly better performance.
 <hr>
